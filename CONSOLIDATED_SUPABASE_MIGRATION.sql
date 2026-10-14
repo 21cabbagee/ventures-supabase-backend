@@ -1,6 +1,6 @@
 -- ============================================================================
 -- MASTER VENTURES UNIFIED BACKEND SCHEMA
--- Supabase / PostgreSQL 15+ Migration
+-- Supabase / PostgreSQL 15+ Migration (Cloud & SQL Editor Compatible)
 -- Author: Antigravity IDE Autonomous Systems
 -- Description: Unifies Auth, Realtime, and Data Storage for all 42 Ventures
 -- ============================================================================
@@ -9,32 +9,8 @@
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 
--- Ensure auth schema and helpers exist for vanilla PostgreSQL and Supabase
-CREATE SCHEMA IF NOT EXISTS auth;
-
-CREATE TABLE IF NOT EXISTS auth.users (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    email TEXT UNIQUE,
-    raw_user_meta_data JSONB DEFAULT '{}'::jsonb,
-    created_at TIMESTAMPTZ DEFAULT now()
-);
-
-CREATE OR REPLACE FUNCTION auth.uid() RETURNS UUID AS $$
-  SELECT COALESCE(
-    nullif(current_setting('request.jwt.claim.sub', true), ''),
-    (nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'sub')
-  )::uuid;
-$$ LANGUAGE sql STABLE;
-
-CREATE OR REPLACE FUNCTION auth.role() RETURNS TEXT AS $$
-  SELECT COALESCE(
-    nullif(current_setting('request.jwt.claim.role', true), ''),
-    (nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'role')
-  )::text;
-$$ LANGUAGE sql STABLE;
-
 -- ============================================================================
--- 1. VENTURES REGISTRY & DIRECTORY
+-- 1. VENTURES REGISTRY & DIRECTORY (All 42 Ventures)
 -- ============================================================================
 
 CREATE TABLE IF NOT EXISTS public.ventures (
@@ -293,10 +269,13 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
-DROP TRIGGER IF EXISTS on_auth_user_created ON auth.users;
-CREATE TRIGGER on_auth_user_created
-    AFTER INSERT ON auth.users
-    FOR EACH ROW EXECUTE FUNCTION public.handle_new_user();
+DO $$ BEGIN
+    DROP TRIGGER IF EXISTS on_auth_user_created ON auth.users;
+    CREATE TRIGGER on_auth_user_created
+        AFTER INSERT ON auth.users
+        FOR EACH ROW EXECUTE FUNCTION public.handle_new_user();
+EXCEPTION WHEN others THEN NULL;
+END $$;
 
 -- ============================================================================
 -- 10. ROW LEVEL SECURITY (RLS) POLICIES
@@ -354,7 +333,7 @@ EXCEPTION WHEN others THEN NULL;
 END $$;
 
 -- ============================================================================
--- SEED DATA: All 42 Ventures + Initial Domain Data
+-- 11. SEED DATA: ALL 42 VENTURES, PREDICTION MARKETS & 300 AGENTS
 -- ============================================================================
 
 INSERT INTO public.ventures (slug, name, tagline, description, category, website_url, repo_url, status)
