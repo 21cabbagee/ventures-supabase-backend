@@ -9,6 +9,30 @@
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 
+-- Ensure auth schema and helpers exist for vanilla PostgreSQL and Supabase
+CREATE SCHEMA IF NOT EXISTS auth;
+
+CREATE TABLE IF NOT EXISTS auth.users (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    email TEXT UNIQUE,
+    raw_user_meta_data JSONB DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE OR REPLACE FUNCTION auth.uid() RETURNS UUID AS $$
+  SELECT COALESCE(
+    nullif(current_setting('request.jwt.claim.sub', true), ''),
+    (nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'sub')
+  )::uuid;
+$$ LANGUAGE sql STABLE;
+
+CREATE OR REPLACE FUNCTION auth.role() RETURNS TEXT AS $$
+  SELECT COALESCE(
+    nullif(current_setting('request.jwt.claim.role', true), ''),
+    (nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'role')
+  )::text;
+$$ LANGUAGE sql STABLE;
+
 -- ============================================================================
 -- 1. VENTURES REGISTRY & DIRECTORY
 -- ============================================================================
@@ -295,31 +319,36 @@ ALTER TABLE public.enterprise_audit_logs ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.dispute_cases ENABLE ROW LEVEL SECURITY;
 
 -- Public read for catalog and public feeds
-CREATE POLICY "Public can view ventures" ON public.ventures FOR SELECT USING (true);
-CREATE POLICY "Public can view active markets" ON public.veridex_markets FOR SELECT USING (true);
-CREATE POLICY "Public can view public trades" ON public.veridex_trades FOR SELECT USING (true);
-CREATE POLICY "Public can view public events" ON public.ventures_events FOR SELECT USING (visibility = 'public');
-CREATE POLICY "Public can view courses" ON public.operator_courses FOR SELECT USING (is_published = true);
-CREATE POLICY "Public can view swarm agents" ON public.swarm_agents FOR SELECT USING (true);
-CREATE POLICY "Public can view context graph" ON public.swarm_context_graph FOR SELECT USING (true);
+DO $$ BEGIN
+  CREATE POLICY "Public can view ventures" ON public.ventures FOR SELECT USING (true);
+  CREATE POLICY "Public can view active markets" ON public.veridex_markets FOR SELECT USING (true);
+  CREATE POLICY "Public can view public trades" ON public.veridex_trades FOR SELECT USING (true);
+  CREATE POLICY "Public can view public events" ON public.ventures_events FOR SELECT USING (visibility = 'public');
+  CREATE POLICY "Public can view courses" ON public.operator_courses FOR SELECT USING (is_published = true);
+  CREATE POLICY "Public can view swarm agents" ON public.swarm_agents FOR SELECT USING (true);
+  CREATE POLICY "Public can view context graph" ON public.swarm_context_graph FOR SELECT USING (true);
 
--- User-scoped policies
-CREATE POLICY "Users view own profile" ON public.profiles FOR SELECT USING (auth.uid() = id);
-CREATE POLICY "Users update own profile" ON public.profiles FOR UPDATE USING (auth.uid() = id);
+  CREATE POLICY "Users view own profile" ON public.profiles FOR SELECT USING (auth.uid() = id);
+  CREATE POLICY "Users update own profile" ON public.profiles FOR UPDATE USING (auth.uid() = id);
 
-CREATE POLICY "Users view own orders" ON public.veridex_orders FOR SELECT USING (auth.uid() = user_id);
-CREATE POLICY "Users create own orders" ON public.veridex_orders FOR INSERT WITH CHECK (auth.uid() = user_id);
-CREATE POLICY "Users cancel own orders" ON public.veridex_orders FOR UPDATE USING (auth.uid() = user_id);
+  CREATE POLICY "Users view own orders" ON public.veridex_orders FOR SELECT USING (auth.uid() = user_id);
+  CREATE POLICY "Users create own orders" ON public.veridex_orders FOR INSERT WITH CHECK (auth.uid() = user_id);
+  CREATE POLICY "Users cancel own orders" ON public.veridex_orders FOR UPDATE USING (auth.uid() = user_id);
 
-CREATE POLICY "Users view own positions" ON public.veridex_positions FOR SELECT USING (auth.uid() = user_id);
+  CREATE POLICY "Users view own positions" ON public.veridex_positions FOR SELECT USING (auth.uid() = user_id);
 
-CREATE POLICY "Users view and manage projects" ON public.propsoch_projects FOR ALL USING (auth.uid() = user_id);
-CREATE POLICY "Users track course progress" ON public.operator_progress FOR ALL USING (auth.uid() = user_id);
-CREATE POLICY "Merchants view dispute cases" ON public.dispute_cases FOR SELECT USING (auth.uid() = merchant_id);
+  CREATE POLICY "Users view and manage projects" ON public.propsoch_projects FOR ALL USING (auth.uid() = user_id);
+  CREATE POLICY "Users track course progress" ON public.operator_progress FOR ALL USING (auth.uid() = user_id);
+  CREATE POLICY "Merchants view dispute cases" ON public.dispute_cases FOR SELECT USING (auth.uid() = merchant_id);
+EXCEPTION WHEN others THEN NULL;
+END $$;
 
--- Enable Realtime replication on high-velocity tables
-ALTER PUBLICATION supabase_realtime ADD TABLE public.ventures_events;
-ALTER PUBLICATION supabase_realtime ADD TABLE public.veridex_trades;
-ALTER PUBLICATION supabase_realtime ADD TABLE public.veridex_markets;
-ALTER PUBLICATION supabase_realtime ADD TABLE public.veridex_orders;
-ALTER PUBLICATION supabase_realtime ADD TABLE public.swarm_context_graph;
+-- Enable Realtime replication
+DO $$ BEGIN
+  ALTER PUBLICATION supabase_realtime ADD TABLE public.ventures_events;
+  ALTER PUBLICATION supabase_realtime ADD TABLE public.veridex_trades;
+  ALTER PUBLICATION supabase_realtime ADD TABLE public.veridex_markets;
+  ALTER PUBLICATION supabase_realtime ADD TABLE public.veridex_orders;
+  ALTER PUBLICATION supabase_realtime ADD TABLE public.swarm_context_graph;
+EXCEPTION WHEN others THEN NULL;
+END $$;
